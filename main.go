@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"time"
@@ -15,11 +14,18 @@ import (
 	"github.com/joho/godotenv"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
+
+var counter struct {
+	Count int `bson:"count"`
+}
 
 type request struct {
 	Url string `json:"url"`
 }
+
+var inputReq request
 
 type response struct {
 	ID        int       `json:"id"`
@@ -29,42 +35,49 @@ type response struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
+var outputRes response
+
 func main() {
 	router := gin.Default()
 	router.POST("/shorten", postShorten)
 	router.GET("/shorten/:code", getShortenByCode)
+	router.PUT("/shorten/:code", putShortenByCode)
 
 	router.Run("localhost:8080")
 }
 
-func postShorten(c *gin.Context) {
-	var newShortenReq request
+var (
+	CounterCol *mongo.Collection
+	UrlCol     *mongo.Collection
+)
 
-	if err := c.BindJSON(&newShortenReq); err != nil {
+func postShorten(c *gin.Context) {
+
+	if err := c.BindJSON(&inputReq); err != nil {
 		return
 	}
 
-	collection := connect()
+	hash := hashUrl(inputReq.Url)
 
-	fmt.Println(newShortenReq.Url)
+	connect()
 
-	hash := hashUrl(newShortenReq.Url)
+	getNewId()
 
-	newShortenRes := response{
-		ID:        1,
-		Url:       newShortenReq.Url,
-		Code:      hash,
+	outputRes = response{
+		ID:        counter.Count,
+		Url:       inputReq.Url,
+		Code:      hash[:4],
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
 
-	result, err := collection.InsertOne(context.TODO(), newShortenRes)
+	result, err := UrlCol.InsertOne(context.TODO(), outputRes)
 	if err != nil {
 		panic(err)
 	}
 	fmt.Printf("URL inserted with ID: %s\n", result.InsertedID)
 
-	c.IndentedJSON(http.StatusCreated, newShortenRes)
+	c.IndentedJSON(http.StatusCreated, outputRes)
 
 }
 
@@ -73,16 +86,36 @@ func getShortenByCode(c *gin.Context) {
 
 	fmt.Println(code)
 
-	newShortenRes := response{
-		ID:        1,
-		Url:       "abc",
-		Code:      code,
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
+	connect()
+
+	getOriginalUrl(code)
+
+	c.IndentedJSON(http.StatusOK, outputRes)
+
+}
+
+func putShortenByCode(c *gin.Context) {
+	code := c.Param("code")
+
+	if err := c.BindJSON(&inputReq); err != nil {
+		return
 	}
 
-	c.IndentedJSON(http.StatusOK, newShortenRes)
+	fmt.Println(code)
 
+	connect()
+
+	filter := bson.M{"code": code}
+	update := bson.M{"$set": bson.M{"url": inputReq.Url, "updatedat": time.Now()}}
+
+	opts := options.FindOneAndUpdate().
+		SetReturnDocument(options.After)
+
+	if err := UrlCol.FindOneAndUpdate(context.TODO(), filter, update, opts).Decode(&outputRes); err != nil {
+		panic(err)
+	}
+
+	c.IndentedJSON(http.StatusOK, outputRes)
 }
 
 func hashUrl(url string) string {
@@ -91,10 +124,10 @@ func hashUrl(url string) string {
 	return hex.EncodeToString(sha1.Sum(nil))
 }
 
-func connect() *mongo.Collection {
+func connect() {
 	err := godotenv.Load(".env")
 	if err != nil {
-		log.Fatalf("Error loading .env file: %s", err)
+		panic(err)
 	}
 
 	MONGO_URI := os.Getenv("MONGO_URI")
@@ -105,8 +138,28 @@ func connect() *mongo.Collection {
 		panic(err)
 	}
 
-	collection := client.Database("go-url-shortener").Collection("urls")
+	CounterCol = client.Database("go-url-shortener").Collection("counter")
+	UrlCol = client.Database("go-url-shortener").Collection("urls")
 
 	fmt.Println("Connected to db")
-	return collection
+}
+
+func getNewId() {
+	filter := bson.M{"_id": "counter"}
+	update := bson.M{"$inc": bson.M{"count": 1}}
+
+	opts := options.FindOneAndUpdate().
+		SetUpsert(true).
+		SetReturnDocument(options.After)
+
+	if err := CounterCol.FindOneAndUpdate(context.TODO(), filter, update, opts).Decode(&counter); err != nil {
+		panic(err)
+	}
+}
+
+func getOriginalUrl(code string) {
+	filter := bson.M{"code": code}
+	if err := UrlCol.FindOne(context.TODO(), filter).Decode(&outputRes); err != nil {
+		panic(err)
+	}
 }
