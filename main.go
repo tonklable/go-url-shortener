@@ -42,6 +42,7 @@ func main() {
 	router.POST("/shorten", postShorten)
 	router.GET("/shorten/:code", getShortenByCode)
 	router.PUT("/shorten/:code", putShortenByCode)
+	router.DELETE("/shorten/:code", deleteShortenByCode)
 
 	router.Run("localhost:8080")
 }
@@ -116,6 +117,22 @@ func putShortenByCode(c *gin.Context) {
 	}
 
 	c.IndentedJSON(http.StatusOK, outputRes)
+}
+
+func deleteShortenByCode(c *gin.Context) {
+	code := c.Param("code")
+
+	fmt.Println(code)
+
+	connect()
+
+	filter := bson.M{"code": code}
+
+	if _, err := UrlCol.DeleteOne(context.TODO(), filter); err != nil {
+		panic(err)
+	}
+
+	c.Status(http.StatusNoContent)
 }
 
 func hashUrl(url string) string {
