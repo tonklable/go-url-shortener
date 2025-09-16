@@ -37,6 +37,12 @@ type response struct {
 
 var outputRes response
 
+type errorResponse struct {
+	Message string `json:"message"`
+}
+
+var errorRes errorResponse
+
 func main() {
 	router := gin.Default()
 	router.POST("/shorten", postShorten)
@@ -55,14 +61,24 @@ var (
 func postShorten(c *gin.Context) {
 
 	if err := c.BindJSON(&inputReq); err != nil {
+		errorRes.Message = err.Error()
+		c.IndentedJSON(http.StatusBadRequest, errorRes)
 		return
 	}
 
 	hash := hashUrl(inputReq.Url)
 
-	connect()
+	if err := connect(); err != nil {
+		errorRes.Message = err.Error()
+		c.IndentedJSON(http.StatusServiceUnavailable, errorRes)
+		return
+	}
 
-	getNewId()
+	if err := getNewId(); err != nil {
+		errorRes.Message = err.Error()
+		c.IndentedJSON(http.StatusServiceUnavailable, errorRes)
+		return
+	}
 
 	outputRes = response{
 		ID:        counter.Count,
@@ -74,7 +90,8 @@ func postShorten(c *gin.Context) {
 
 	result, err := UrlCol.InsertOne(context.TODO(), outputRes)
 	if err != nil {
-		panic(err)
+		errorRes.Message = err.Error()
+		c.IndentedJSON(http.StatusServiceUnavailable, errorRes)
 	}
 	fmt.Printf("URL inserted with ID: %s\n", result.InsertedID)
 
@@ -87,10 +104,21 @@ func getShortenByCode(c *gin.Context) {
 
 	fmt.Println(code)
 
-	connect()
+	if err := connect(); err != nil {
+		errorRes.Message = err.Error()
+		c.IndentedJSON(http.StatusServiceUnavailable, errorRes)
+		return
+	}
 
-	getOriginalUrl(code)
-
+	if err := getOriginalUrl(code); err != nil {
+		errorRes.Message = err.Error()
+		if err == mongo.ErrNoDocuments {
+			c.IndentedJSON(http.StatusNotFound, errorRes)
+			return
+		}
+		c.IndentedJSON(http.StatusBadRequest, errorRes)
+		return
+	}
 	c.IndentedJSON(http.StatusOK, outputRes)
 
 }
@@ -99,12 +127,18 @@ func putShortenByCode(c *gin.Context) {
 	code := c.Param("code")
 
 	if err := c.BindJSON(&inputReq); err != nil {
+		errorRes.Message = err.Error()
+		c.IndentedJSON(http.StatusBadRequest, errorRes)
 		return
 	}
 
 	fmt.Println(code)
 
-	connect()
+	if err := connect(); err != nil {
+		errorRes.Message = err.Error()
+		c.IndentedJSON(http.StatusServiceUnavailable, errorRes)
+		return
+	}
 
 	filter := bson.M{"code": code}
 	update := bson.M{"$set": bson.M{"url": inputReq.Url, "updatedat": time.Now()}}
@@ -113,7 +147,13 @@ func putShortenByCode(c *gin.Context) {
 		SetReturnDocument(options.After)
 
 	if err := UrlCol.FindOneAndUpdate(context.TODO(), filter, update, opts).Decode(&outputRes); err != nil {
-		panic(err)
+		errorRes.Message = err.Error()
+		if err == mongo.ErrNoDocuments {
+			c.IndentedJSON(http.StatusNotFound, errorRes)
+			return
+		}
+		c.IndentedJSON(http.StatusBadRequest, errorRes)
+		return
 	}
 
 	c.IndentedJSON(http.StatusOK, outputRes)
@@ -124,12 +164,24 @@ func deleteShortenByCode(c *gin.Context) {
 
 	fmt.Println(code)
 
-	connect()
+	if err := connect(); err != nil {
+		c.Error(err)
+		return
+	}
 
 	filter := bson.M{"code": code}
 
-	if _, err := UrlCol.DeleteOne(context.TODO(), filter); err != nil {
-		panic(err)
+	res, err := UrlCol.DeleteOne(context.TODO(), filter)
+	if err != nil {
+		errorRes.Message = err.Error()
+		c.IndentedJSON(http.StatusBadRequest, errorRes)
+		return
+	}
+
+	if res.DeletedCount == 0 {
+		errorRes.Message = "No deletion due to document not found"
+		c.IndentedJSON(http.StatusNotFound, errorRes) // No matching document
+		return
 	}
 
 	c.Status(http.StatusNoContent)
@@ -141,10 +193,10 @@ func hashUrl(url string) string {
 	return hex.EncodeToString(sha1.Sum(nil))
 }
 
-func connect() {
+func connect() error {
 	err := godotenv.Load(".env")
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	MONGO_URI := os.Getenv("MONGO_URI")
@@ -152,16 +204,18 @@ func connect() {
 	clientOption := options.Client().ApplyURI(MONGO_URI)
 	client, err := mongo.Connect(context.TODO(), clientOption)
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	CounterCol = client.Database("go-url-shortener").Collection("counter")
 	UrlCol = client.Database("go-url-shortener").Collection("urls")
 
 	fmt.Println("Connected to db")
+
+	return nil
 }
 
-func getNewId() {
+func getNewId() error {
 	filter := bson.M{"_id": "counter"}
 	update := bson.M{"$inc": bson.M{"count": 1}}
 
@@ -170,13 +224,17 @@ func getNewId() {
 		SetReturnDocument(options.After)
 
 	if err := CounterCol.FindOneAndUpdate(context.TODO(), filter, update, opts).Decode(&counter); err != nil {
-		panic(err)
+		return err
 	}
+
+	return nil
 }
 
-func getOriginalUrl(code string) {
+func getOriginalUrl(code string) error {
 	filter := bson.M{"code": code}
 	if err := UrlCol.FindOne(context.TODO(), filter).Decode(&outputRes); err != nil {
-		panic(err)
+		return err
 	}
+
+	return nil
 }
