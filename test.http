@@ -1,0 +1,27 @@
+GET http://localhost:8080/shorten/0685
+
+###
+
+POST /shorten HTTP/1.1
+Content-Type: application/json
+Host: localhost:8080
+
+{
+    "url": "www.asd.com"
+}
+
+###
+
+PUT /shorten/76f2 HTTP/1.1
+Content-Type: application/json
+Host: localhost:8080
+
+{
+    "url": "www.exampl.com"
+}
+
+###
+
+DELETE /shorten/0585 HTTP/1.1
+Content-Type: application/json
+Host: localhost:8080
