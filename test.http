@@ -1,4 +1,4 @@
-GET http://localhost:8080/shorten/0685
+GET http://localhost:8080/shorten/e5e5
 
 ###
 
@@ -7,21 +7,21 @@ Content-Type: application/json
 Host: localhost:8080
 
 {
-    "url": "www.asd.com"
+    "url": "www.qwaaazxce.com"
 }
 
 ###
 
-PUT /shorten/76f2 HTTP/1.1
+PUT /shorten/e5e5 HTTP/1.1
 Content-Type: application/json
 Host: localhost:8080
 
 {
-    "url": "www.exampl.com"
+    "url": "www.omgaAfddd.com"
 }
 
 ###
 
-DELETE /shorten/0585 HTTP/1.1
+DELETE /shorten/e5e5 HTTP/1.1
 Content-Type: application/json
 Host: localhost:8080
