@@ -38,6 +38,10 @@ type errorResponse struct {
 }
 
 func main() {
+	if err := connect(); err != nil {
+		panic(err)
+	}
+
 	router := gin.Default()
 	router.POST("/shorten", postShorten)
 	router.GET("/shorten/:code", getShortenByCode)
@@ -58,16 +62,7 @@ func postShorten(c *gin.Context) {
 	var outputRes response
 
 	if err := c.BindJSON(&inputReq); err != nil {
-		var errorRes errorResponse
-		errorRes.Message = err.Error()
-		c.IndentedJSON(http.StatusBadRequest, errorRes)
-		return
-	}
-
-	if err := connect(); err != nil {
-		var errorRes errorResponse
-		errorRes.Message = err.Error()
-		c.IndentedJSON(http.StatusServiceUnavailable, errorRes)
+		respondError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -80,9 +75,7 @@ func postShorten(c *gin.Context) {
 	hash := hashUrl(inputReq.Url)
 
 	if err := getNewId(); err != nil {
-		var errorRes errorResponse
-		errorRes.Message = err.Error()
-		c.IndentedJSON(http.StatusServiceUnavailable, errorRes)
+		respondError(c, http.StatusServiceUnavailable, err.Error())
 		return
 	}
 
@@ -94,11 +87,12 @@ func postShorten(c *gin.Context) {
 		UpdatedAt: time.Now(),
 	}
 
-	result, err := UrlCol.InsertOne(context.TODO(), outputRes)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := UrlCol.InsertOne(ctx, outputRes)
 	if err != nil {
-		var errorRes errorResponse
-		errorRes.Message = err.Error()
-		c.IndentedJSON(http.StatusServiceUnavailable, errorRes)
+		respondError(c, http.StatusServiceUnavailable, err.Error())
 		return
 	}
 	fmt.Printf("URL inserted with ID: %s\n", result.InsertedID)
@@ -115,21 +109,12 @@ func getShortenByCode(c *gin.Context) {
 
 	fmt.Println(code)
 
-	if err := connect(); err != nil {
-		var errorRes errorResponse
-		errorRes.Message = err.Error()
-		c.IndentedJSON(http.StatusServiceUnavailable, errorRes)
-		return
-	}
-
 	if err := getInfoByCode(code, &outputRes); err != nil {
-		var errorRes errorResponse
-		errorRes.Message = err.Error()
 		if err == mongo.ErrNoDocuments {
-			c.IndentedJSON(http.StatusNotFound, errorRes)
+			respondError(c, http.StatusNotFound, err.Error())
 			return
 		}
-		c.IndentedJSON(http.StatusBadRequest, errorRes)
+		respondError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	c.IndentedJSON(http.StatusOK, outputRes)
@@ -143,24 +128,13 @@ func putShortenByCode(c *gin.Context) {
 	code := c.Param("code")
 
 	if err := c.BindJSON(&inputReq); err != nil {
-		var errorRes errorResponse
-		errorRes.Message = err.Error()
-		c.IndentedJSON(http.StatusBadRequest, errorRes)
-		return
-	}
-
-	if err := connect(); err != nil {
-		var errorRes errorResponse
-		errorRes.Message = err.Error()
-		c.IndentedJSON(http.StatusServiceUnavailable, errorRes)
+		respondError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	err := getInfoByUrl(inputReq.Url, &outputRes)
 	if err == nil {
-		var errorRes errorResponse
-		errorRes.Message = "Already exists this url in the code " + outputRes.Code
-		c.IndentedJSON(http.StatusBadRequest, errorRes)
+		respondError(c, http.StatusBadRequest, "Already exists this url in the code "+outputRes.Code)
 		return
 	}
 
@@ -170,14 +144,15 @@ func putShortenByCode(c *gin.Context) {
 	opts := options.FindOneAndUpdate().
 		SetReturnDocument(options.After)
 
-	if err := UrlCol.FindOneAndUpdate(context.TODO(), filter, update, opts).Decode(&outputRes); err != nil {
-		var errorRes errorResponse
-		errorRes.Message = err.Error()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := UrlCol.FindOneAndUpdate(ctx, filter, update, opts).Decode(&outputRes); err != nil {
 		if err == mongo.ErrNoDocuments {
-			c.IndentedJSON(http.StatusNotFound, errorRes)
+			respondError(c, http.StatusNotFound, err.Error())
 			return
 		}
-		c.IndentedJSON(http.StatusBadRequest, errorRes)
+		respondError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -189,25 +164,19 @@ func deleteShortenByCode(c *gin.Context) {
 
 	fmt.Println(code)
 
-	if err := connect(); err != nil {
-		c.Error(err)
-		return
-	}
-
 	filter := bson.M{"code": code}
 
-	res, err := UrlCol.DeleteOne(context.TODO(), filter)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	res, err := UrlCol.DeleteOne(ctx, filter)
 	if err != nil {
-		var errorRes errorResponse
-		errorRes.Message = err.Error()
-		c.IndentedJSON(http.StatusBadRequest, errorRes)
+		respondError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	if res.DeletedCount == 0 {
-		var errorRes errorResponse
-		errorRes.Message = "No deletion due to document not found"
-		c.IndentedJSON(http.StatusNotFound, errorRes) // No matching document
+		respondError(c, http.StatusBadRequest, "No deletion due to document not found")
 		return
 	}
 
@@ -239,9 +208,12 @@ func connect() error {
 		Options: options.Index().SetUnique(true),
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
 	CounterCol = client.Database("go-url-shortener").Collection("counter")
 	UrlCol = client.Database("go-url-shortener").Collection("urls")
-	_, err = UrlCol.Indexes().CreateOne(context.TODO(), indexModel)
+	_, err = UrlCol.Indexes().CreateOne(ctx, indexModel)
 	if err != nil {
 		return err
 	}
@@ -259,7 +231,10 @@ func getNewId() error {
 		SetUpsert(true).
 		SetReturnDocument(options.After)
 
-	if err := CounterCol.FindOneAndUpdate(context.TODO(), filter, update, opts).Decode(&counter); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := CounterCol.FindOneAndUpdate(ctx, filter, update, opts).Decode(&counter); err != nil {
 		return err
 	}
 
@@ -268,7 +243,11 @@ func getNewId() error {
 
 func getInfoByCode(code string, outputRes *response) error {
 	filter := bson.M{"code": code}
-	if err := UrlCol.FindOne(context.TODO(), filter).Decode(&outputRes); err != nil {
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := UrlCol.FindOne(ctx, filter).Decode(outputRes); err != nil {
 		return err
 	}
 
@@ -277,8 +256,12 @@ func getInfoByCode(code string, outputRes *response) error {
 
 func getInfoByUrl(url string, outputRes *response) error {
 	filter := bson.M{"url": url}
-	if err := UrlCol.FindOne(context.TODO(), filter).Decode(&outputRes); err != nil {
+	if err := UrlCol.FindOne(context.TODO(), filter).Decode(outputRes); err != nil {
 		return err
 	}
 	return nil
+}
+
+func respondError(c *gin.Context, status int, err string) {
+	c.IndentedJSON(status, errorResponse{Message: err})
 }
