@@ -1,8 +1,6 @@
 # go-url-shortener
 
-Go learning project for URL shortener
-
-Please feel free to comment
+This is my Go learning project for URL shortener. I write it without using AI to practice myself! Please feel free to comment.
 
 How to run
 
